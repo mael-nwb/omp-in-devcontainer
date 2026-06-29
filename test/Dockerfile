@@ -3,7 +3,7 @@ FROM mcr.microsoft.com/devcontainers/base:ubuntu
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl git bash xz-utils \
+    && apt-get install -y --no-install-recommends ca-certificates curl git bash \
     && rm -rf /var/lib/apt/lists/*
 
 # Copie de la Feature locale et exécution de l'installateur.

@@ -2,22 +2,22 @@
 set -eu
 
 OMP_INSTALLER_URL="https://omp.sh/install.sh"
-NODE_DIST_URL="https://nodejs.org/dist/latest-v22.x"
-NODE_INSTALL_DIR="/usr/local/lib/omp-node"
+BUN_INSTALLER_URL="https://bun.sh/install"
+BUN_INSTALL_DIR="/usr/local/lib/omp-bun"
 OMP_INSTALL_DIR="/usr/local/lib/omp-cli"
 OMP_WRAPPER_DIR="/usr/local/lib/omp-cli"
 OMP_REAL_BIN="$OMP_WRAPPER_DIR/omp-real"
 OMP_REWRITE_SCRIPT="$OMP_WRAPPER_DIR/rewrite-models.mjs"
 OMP_INIT_SCRIPT="$OMP_WRAPPER_DIR/init-agent-config.sh"
 OMP_PROFILE_SCRIPT="/etc/profile.d/omp-devcontainer.sh"
-readonly OMP_INSTALLER_URL NODE_DIST_URL NODE_INSTALL_DIR OMP_INSTALL_DIR OMP_WRAPPER_DIR OMP_REAL_BIN OMP_REWRITE_SCRIPT OMP_INIT_SCRIPT OMP_PROFILE_SCRIPT
+readonly OMP_INSTALLER_URL BUN_INSTALLER_URL BUN_INSTALL_DIR OMP_INSTALL_DIR OMP_WRAPPER_DIR OMP_REAL_BIN OMP_REWRITE_SCRIPT OMP_INIT_SCRIPT OMP_PROFILE_SCRIPT
 
 master() {
     echo "Activating feature 'omp-cli'"
 
     require_command curl
-    require_command tar
-    ensure_node_runtime
+    require_command bash
+    ensure_bun_runtime
     install_omp
     expose_omp_command
 
@@ -41,145 +41,67 @@ require_command() {
     return 1
 }
 
-ensure_node_runtime() {
-    if node_runtime_is_supported; then
+ensure_bun_runtime() {
+    if bun_runtime_is_supported; then
+        expose_bun_command
         return 0
     fi
 
-    install_standalone_node
-    export PATH="$NODE_INSTALL_DIR/current/bin:$PATH"
+    install_standalone_bun
+    export PATH="$BUN_INSTALL_DIR/bin:$PATH"
+    expose_bun_command
 
-    if node_runtime_is_supported; then
+    if bun_runtime_is_supported; then
         return 0
     fi
 
-    echo "ERROR: Node.js 22.19.0 or newer with npm is required to run the omp config rewrite script" >&2
+    echo "ERROR: Bun 1.3.14 or newer is required to install and run omp" >&2
     return 1
 }
 
-node_runtime_is_supported() {
-    if ! command -v node >/dev/null 2>&1; then
+bun_runtime_is_supported() {
+    if ! command -v bun >/dev/null 2>&1; then
         return 1
     fi
 
-    if ! command -v npm >/dev/null 2>&1; then
+    bun -e 'const [major, minor, patch] = Bun.version.split(".").map(Number); process.exit(major > 1 || (major === 1 && (minor > 3 || (minor === 3 && patch >= 14))) ? 0 : 1)' >/dev/null 2>&1
+}
+
+install_standalone_bun() {
+    mkdir -p "$BUN_INSTALL_DIR"
+    curl -fsSL "$BUN_INSTALLER_URL" | BUN_INSTALL="$BUN_INSTALL_DIR" bash
+}
+
+expose_bun_command() {
+    bun_path="$(command -v bun 2>/dev/null || true)"
+    if [ -z "$bun_path" ] && [ -x "$BUN_INSTALL_DIR/bin/bun" ]; then
+        bun_path="$BUN_INSTALL_DIR/bin/bun"
+    fi
+
+    if [ -z "$bun_path" ]; then
+        echo "ERROR: Bun installation failed: bun command not found" >&2
         return 1
     fi
 
-    node -e 'const [major, minor, patch] = process.versions.node.split(".").map(Number); process.exit(major > 22 || (major === 22 && (minor > 19 || (minor === 19 && patch >= 0))) ? 0 : 1)' >/dev/null 2>&1
-}
-
-install_standalone_node() {
-    node_platform="$(detect_node_platform)"
-    node_arch="$(detect_node_arch)"
-    node_tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/omp-node.XXXXXX")"
-    checksum_file="$node_tmp_dir/SHASUMS256.txt"
-
-    ensure_xz_support
-
-    curl -fsSL "$NODE_DIST_URL/SHASUMS256.txt" -o "$checksum_file"
-    node_file="$(find_node_archive "$checksum_file" "$node_platform" "$node_arch")"
-
-    if [ -z "$node_file" ]; then
-        echo "ERROR: No Node.js archive found for ${node_platform}-${node_arch}" >&2
-        return 1
-    fi
-
-    mkdir -p "$NODE_INSTALL_DIR"
-    curl -fsSL "$NODE_DIST_URL/$node_file" -o "$node_tmp_dir/$node_file"
-    verify_node_archive "$node_tmp_dir" "$node_file"
-    tar -xf "$node_tmp_dir/$node_file" -C "$NODE_INSTALL_DIR"
-    ln -sfn "$NODE_INSTALL_DIR/${node_file%.tar.xz}" "$NODE_INSTALL_DIR/current"
-    ln -sfn "$NODE_INSTALL_DIR/current/bin/node" /usr/local/bin/node
-    ln -sfn "$NODE_INSTALL_DIR/current/bin/npm" /usr/local/bin/npm
-    ln -sfn "$NODE_INSTALL_DIR/current/bin/npx" /usr/local/bin/npx
-    rm -rf "$node_tmp_dir"
-}
-
-detect_node_platform() {
-    case "$(uname -s)" in
-        Linux) echo "linux" ;;
-        Darwin) echo "darwin" ;;
-        *)
-            echo "ERROR: Unsupported operating system: $(uname -s)" >&2
-            return 1
-            ;;
-    esac
-}
-
-detect_node_arch() {
-    case "$(uname -m)" in
-        x86_64|amd64) echo "x64" ;;
-        arm64|aarch64) echo "arm64" ;;
-        armv7l) echo "armv7l" ;;
-        *)
-            echo "ERROR: Unsupported CPU architecture: $(uname -m)" >&2
-            return 1
-            ;;
-    esac
-}
-
-ensure_xz_support() {
-    if command -v xz >/dev/null 2>&1; then
-        return 0
-    fi
-
-    if command -v apt-get >/dev/null 2>&1; then
-        apt-get update
-        apt-get install -y --no-install-recommends xz-utils
-        return 0
-    fi
-
-    if command -v apk >/dev/null 2>&1; then
-        apk add --no-cache xz
-        return 0
-    fi
-
-    echo "ERROR: xz is required to extract the Node.js archive" >&2
-    return 1
-}
-
-find_node_archive() {
-    checksum_file="$1"
-    node_platform="$2"
-    node_arch="$3"
-
-    awk -v suffix="-$node_platform-$node_arch.tar.xz" '
-        index($2, "node-v") == 1 && substr($2, length($2) - length(suffix) + 1) == suffix { print $2; exit }
-    ' "$checksum_file"
-}
-
-verify_node_archive() {
-    node_tmp_dir="$1"
-    node_file="$2"
-    selected_checksum_file="$node_tmp_dir/SHASUMS256.selected"
-
-    awk -v file="$node_file" '$2 == file { print }' "$node_tmp_dir/SHASUMS256.txt" > "$selected_checksum_file"
-
-    if command -v sha256sum >/dev/null 2>&1; then
-        (cd "$node_tmp_dir" && sha256sum -c "$(basename "$selected_checksum_file")")
-        return 0
-    fi
-
-    if command -v shasum >/dev/null 2>&1; then
-        (cd "$node_tmp_dir" && shasum -a 256 -c "$(basename "$selected_checksum_file")")
-        return 0
-    fi
-
-    echo "ERROR: No SHA-256 checksum tool found" >&2
-    return 1
+    ln -sfn "$bun_path" /usr/local/bin/bun
 }
 
 install_omp() {
-    # omp ships a self-contained Rust binary; when bun is absent the installer
-    # falls back to the prebuilt binary and drops it into PI_INSTALL_DIR.
-    curl -fsSL "$OMP_INSTALLER_URL" | PI_INSTALL_DIR="$OMP_INSTALL_DIR" sh
+    curl -fsSL "$OMP_INSTALLER_URL" | BUN_INSTALL="$BUN_INSTALL_DIR" PI_INSTALL_DIR="$OMP_INSTALL_DIR" PATH="$BUN_INSTALL_DIR/bin:$PATH" sh -s -- --source
 }
 
 expose_omp_command() {
     omp_path="$(command -v omp 2>/dev/null || true)"
 
-    if [ -z "$omp_path" ]; then
+    if [ -z "$omp_path" ] && [ -x "$BUN_INSTALL_DIR/bin/omp" ]; then
+        omp_path="$BUN_INSTALL_DIR/bin/omp"
+    fi
+
+    if [ -z "$omp_path" ] && [ -x "$HOME/.bun/bin/omp" ]; then
+        omp_path="$HOME/.bun/bin/omp"
+    fi
+
+    if [ -z "$omp_path" ] && [ -e "$OMP_INSTALL_DIR/omp" ]; then
         omp_path="$OMP_INSTALL_DIR/omp"
     fi
 
@@ -198,9 +120,9 @@ expose_omp_command() {
 
 install_models_rewrite_script() {
     cat > "$OMP_REWRITE_SCRIPT" <<'EOF'
-#!/usr/bin/env node
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+#!/usr/bin/env bun
+import { existsSync, readFileSync, writeFileSync } from "fs";
+import { join } from "path";
 
 const agentDir = process.argv[2];
 const clearEnabledModels = process.argv.includes("--clear-enabled-models");
@@ -408,7 +330,7 @@ if [ -d "\$OMP_SOURCE_AGENT_DIR" ] && [ ! -e "\$OMP_SEEDED_MARKER" ]; then
     : > "\$OMP_SEEDED_MARKER"
 fi
 
-node "\$OMP_REWRITE_SCRIPT" "\$OMP_CONTAINER_AGENT_DIR" \$clear_enabled_models_flag
+bun "\$OMP_REWRITE_SCRIPT" "\$OMP_CONTAINER_AGENT_DIR" \$clear_enabled_models_flag
 EOF
     chmod +x "$OMP_INIT_SCRIPT"
 }

@@ -20,7 +20,7 @@ Depuis GHCR après publication, adaptez le chemin au dépôt publié:
 }
 ```
 
-La feature installe omp via le binaire prébuilt officiel (`https://omp.sh/install.sh`). omp étant un binaire Rust auto-suffisant, **aucun runtime n'est requis pour l'agent lui-même**. La feature installe toutefois Node.js 22 uniquement pour exécuter le petit script de réécriture de config au démarrage (voir ci-dessous).
+La feature installe Bun puis omp via l'installation source officielle (`https://omp.sh/install.sh --source`). Bun sert à la fois de runtime pour le CLI omp installé et pour le petit script de réécriture de config au démarrage (voir ci-dessous).
 
 Dans un Dev Container, la commande `omp` utilise ensuite une copie locale de la configuration dans `~/.omp-devcontainer/agent`. La feature exporte aussi `PI_CODING_AGENT_DIR` vers ce répertoire pour les shells du conteneur (omp honore cette variable). Si une configuration hôte est montée dans `~/.omp/agent`, elle est copiée une seule fois dans ce répertoire interne au conteneur puis isolée. La feature réécrit automatiquement `providers.ollama.baseUrl` de `localhost` vers `host.docker.internal` dans cette copie interne, sans modifier la configuration hôte. Elle exporte aussi `OLLAMA_HOST` / `OLLAMA_BASE_URL` vers `host.docker.internal:11434` pour la découverte implicite Ollama. Lors de cette copie initiale, `settings.json` est aussi nettoyé de `enabledModels` pour éviter une liste de modèles obsolète.
 
@@ -63,7 +63,7 @@ bash scripts/build_and_test.sh
 
 - `src/omp-cli/`: Feature locale pour omp CLI
 - `test/omp-cli/`: tests de la feature (scénarios + scripts)
-- `test/Dockerfile`: exécute l'installation de la feature sur une image sans Node préinstallé et vérifie la présence de `omp`
+- `test/Dockerfile`: exécute l'installation de la feature sur une image sans Bun préinstallé et vérifie la présence de `omp`
 - `scripts/build_and_test.sh`: build + run de l'image de test
 
 ## Installation via Codex

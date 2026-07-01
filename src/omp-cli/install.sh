@@ -4,13 +4,14 @@ set -eu
 OMP_INSTALLER_URL="https://omp.sh/install.sh"
 BUN_INSTALLER_URL="https://bun.sh/install"
 BUN_INSTALL_DIR="/usr/local/lib/omp-bun"
+MIN_BUN_VERSION="1.3.14"
 OMP_INSTALL_DIR="/usr/local/lib/omp-cli"
 OMP_WRAPPER_DIR="/usr/local/lib/omp-cli"
 OMP_REAL_BIN="$OMP_WRAPPER_DIR/omp-real"
 OMP_REWRITE_SCRIPT="$OMP_WRAPPER_DIR/rewrite-models.mjs"
 OMP_INIT_SCRIPT="$OMP_WRAPPER_DIR/init-agent-config.sh"
 OMP_PROFILE_SCRIPT="/etc/profile.d/omp-devcontainer.sh"
-readonly OMP_INSTALLER_URL BUN_INSTALLER_URL BUN_INSTALL_DIR OMP_INSTALL_DIR OMP_WRAPPER_DIR OMP_REAL_BIN OMP_REWRITE_SCRIPT OMP_INIT_SCRIPT OMP_PROFILE_SCRIPT
+readonly OMP_INSTALLER_URL BUN_INSTALLER_URL BUN_INSTALL_DIR MIN_BUN_VERSION OMP_INSTALL_DIR OMP_WRAPPER_DIR OMP_REAL_BIN OMP_REWRITE_SCRIPT OMP_INIT_SCRIPT OMP_PROFILE_SCRIPT
 
 master() {
     echo "Activating feature 'omp-cli'"
@@ -55,8 +56,28 @@ ensure_bun_runtime() {
         return 0
     fi
 
-    echo "ERROR: Bun 1.3.14 or newer is required to install and run omp" >&2
+    echo "ERROR: Bun ${MIN_BUN_VERSION} or newer is required to install and run omp" >&2
     return 1
+}
+
+version_ge() {
+    current="$1"
+    minimum="$2"
+
+    current_major="${current%%.*}"
+    current_rest="${current#*.}"
+    current_minor="${current_rest%%.*}"
+    current_patch="${current_rest#*.}"
+    current_patch="${current_patch%%-*}"
+
+    minimum_major="${minimum%%.*}"
+    minimum_rest="${minimum#*.}"
+    minimum_minor="${minimum_rest%%.*}"
+    minimum_patch="${minimum_rest#*.}"
+
+    [ "$current_major" -ne "$minimum_major" ] && { [ "$current_major" -gt "$minimum_major" ]; return $?; }
+    [ "$current_minor" -ne "$minimum_minor" ] && { [ "$current_minor" -gt "$minimum_minor" ]; return $?; }
+    [ "$current_patch" -ge "$minimum_patch" ]
 }
 
 bun_runtime_is_supported() {
@@ -64,12 +85,62 @@ bun_runtime_is_supported() {
         return 1
     fi
 
-    bun -e 'const [major, minor, patch] = Bun.version.split(".").map(Number); process.exit(major > 1 || (major === 1 && (minor > 3 || (minor === 3 && patch >= 14))) ? 0 : 1)' >/dev/null 2>&1
+    version_raw="$(bun --version 2>/dev/null || true)"
+    [ -n "$version_raw" ] || return 1
+    version_ge "$version_raw" "$MIN_BUN_VERSION"
+}
+
+bun_platform_is_supported() {
+    case "$(uname -s)" in
+        Linux|Darwin) ;;
+        *)
+            echo "ERROR: Unsupported operating system for Bun: $(uname -s)" >&2
+            return 1
+            ;;
+    esac
+
+    case "$(uname -m)" in
+        x86_64|amd64|arm64|aarch64) ;;
+        *)
+            echo "ERROR: Unsupported CPU architecture for Bun: $(uname -m)" >&2
+            return 1
+            ;;
+    esac
+
+    return 0
+}
+
+ensure_unzip_support() {
+    if command -v unzip >/dev/null 2>&1; then
+        return 0
+    fi
+
+    if command -v apt-get >/dev/null 2>&1; then
+        apt-get update
+        apt-get install -y --no-install-recommends unzip
+        return 0
+    fi
+
+    if command -v apk >/dev/null 2>&1; then
+        apk add --no-cache unzip
+        return 0
+    fi
+
+    echo "ERROR: unzip is required to install Bun" >&2
+    return 1
 }
 
 install_standalone_bun() {
+    bun_platform_is_supported
+    ensure_unzip_support
+
     mkdir -p "$BUN_INSTALL_DIR"
-    curl -fsSL "$BUN_INSTALLER_URL" | BUN_INSTALL="$BUN_INSTALL_DIR" bash
+    installer_tmp="$(mktemp -d "${TMPDIR:-/tmp}/omp-bun.XXXXXX")"
+    # Download then execute (not `curl | bash`) so a fetch failure is caught
+    # by `set -e` instead of being masked by the downstream shell exiting 0.
+    curl -fsSL "$BUN_INSTALLER_URL" -o "$installer_tmp/install.sh"
+    BUN_INSTALL="$BUN_INSTALL_DIR" bash "$installer_tmp/install.sh"
+    rm -rf "$installer_tmp"
 }
 
 expose_bun_command() {
@@ -87,7 +158,12 @@ expose_bun_command() {
 }
 
 install_omp() {
-    curl -fsSL "$OMP_INSTALLER_URL" | BUN_INSTALL="$BUN_INSTALL_DIR" PI_INSTALL_DIR="$OMP_INSTALL_DIR" PATH="$BUN_INSTALL_DIR/bin:$PATH" sh -s -- --source
+    installer_tmp="$(mktemp -d "${TMPDIR:-/tmp}/omp-install.XXXXXX")"
+    # Download then execute (not `curl | sh`) so a fetch failure is caught by
+    # `set -e` instead of being masked by the downstream shell exiting 0.
+    curl -fsSL "$OMP_INSTALLER_URL" -o "$installer_tmp/install.sh"
+    BUN_INSTALL="$BUN_INSTALL_DIR" PI_INSTALL_DIR="$OMP_INSTALL_DIR" PATH="$BUN_INSTALL_DIR/bin:$PATH" sh "$installer_tmp/install.sh" --source
+    rm -rf "$installer_tmp"
 }
 
 expose_omp_command() {
@@ -101,7 +177,7 @@ expose_omp_command() {
         omp_path="$HOME/.bun/bin/omp"
     fi
 
-    if [ -z "$omp_path" ] && [ -e "$OMP_INSTALL_DIR/omp" ]; then
+    if [ -z "$omp_path" ] && [ -x "$OMP_INSTALL_DIR/omp" ]; then
         omp_path="$OMP_INSTALL_DIR/omp"
     fi
 

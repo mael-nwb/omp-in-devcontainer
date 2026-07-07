@@ -4,6 +4,16 @@
     "version": "1.0.0",
     "description": "Installs oh-my-pi (omp) CLI in the devcontainer via the official prebuilt binary, with isolated config",
     "options": {},
+    "containerEnv": {
+        "PI_CODING_AGENT_DIR": "/home/vscode/.omp-devcontainer/agent"
+    },
+    "mounts": [
+        {
+            "source": "${localEnv:HOME}/.omp-devcontainer",
+            "target": "/home/vscode/.omp-devcontainer",
+            "type": "bind"
+        }
+    ],
     "dependsOn": {},
     "installsAfter": []
 }

@@ -1,6 +1,11 @@
 {
     "basic": {
         "image": "mcr.microsoft.com/devcontainers/base:ubuntu",
+        "initializeCommand": [
+            "sh",
+            "-lc",
+            "touch \"${localEnv:HOME}/.claude-devcontainer.json\"; mkdir -p \"${localEnv:HOME}/.omp-devcontainer/agent\"; :"
+        ],
         "features": {
             "omp-cli": {}
         }

@@ -1,4 +1,5 @@
-FROM mcr.microsoft.com/devcontainers/base:ubuntu
+ARG BASE_IMAGE=mcr.microsoft.com/devcontainers/base:ubuntu
+FROM ${BASE_IMAGE}
 
 ENV DEBIAN_FRONTEND=noninteractive
 

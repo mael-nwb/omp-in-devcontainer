@@ -44,7 +44,6 @@ require_command() {
 
 ensure_bun_runtime() {
     if bun_runtime_is_supported; then
-        expose_bun_command
         return 0
     fi
 
@@ -154,6 +153,10 @@ expose_bun_command() {
         return 1
     fi
 
+    if [ "$bun_path" = "/usr/local/bin/bun" ]; then
+        return 0
+    fi
+
     ln -sfn "$bun_path" /usr/local/bin/bun
 }
 
@@ -185,6 +188,12 @@ expose_omp_command() {
         echo "ERROR: omp CLI installation failed: omp command not found" >&2
         return 1
     fi
+    # Preserve the target before replacing /usr/local/bin/omp with our wrapper.
+    # Otherwise a symlink installed by omp would make the wrapper recursive.
+    if [ "$omp_path" = "/usr/local/bin/omp" ] && [ -L "$omp_path" ]; then
+        omp_path="$(readlink -f "$omp_path")"
+    fi
+
 
     mkdir -p "$OMP_WRAPPER_DIR"
     ln -sfn "$omp_path" "$OMP_REAL_BIN"
@@ -412,6 +421,7 @@ EOF
 }
 
 install_omp_wrapper() {
+    rm -f /usr/local/bin/omp
     cat > /usr/local/bin/omp <<EOF
 #!/bin/sh
 set -eu

@@ -1,7 +1,7 @@
 {
     "name": "omp CLI",
     "id": "omp-cli",
-    "version": "1.0.1",
+    "version": "1.0.2",
     "description": "Installs oh-my-pi (omp) CLI in the devcontainer via the official prebuilt binary, with isolated config",
     "options": {},
     "containerEnv": {

@@ -2,18 +2,21 @@
     "name": "omp CLI",
     "id": "omp-cli",
     "version": "1.0.2",
-    "description": "Installs oh-my-pi (omp) CLI in the devcontainer via the official prebuilt binary, with isolated config",
+    "description": "Installe oh-my-pi (omp) et synchronise la configuration hôte en préservant les données du conteneur",
     "options": {},
     "containerEnv": {
-        "PI_CODING_AGENT_DIR": "/home/vscode/.omp-devcontainer/agent"
+        "PI_CODING_AGENT_DIR": "/home/vscode/.omp-devcontainer/agent",
+        "OMP_SOURCE_AGENT_DIR": "/mnt/omp-host/agent"
     },
     "mounts": [
         {
             "source": "${localEnv:HOME}/.omp-devcontainer",
             "target": "/home/vscode/.omp-devcontainer",
             "type": "bind"
-        }
+        },
+        "source=${localEnv:HOME}/.omp,target=/mnt/omp-host,type=bind,readonly"
     ],
+    "postStartCommand": "/usr/local/lib/omp-cli/init-agent-config.sh",
     "dependsOn": {},
     "installsAfter": []
 }

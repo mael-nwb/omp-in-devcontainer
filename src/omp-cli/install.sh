@@ -206,188 +206,42 @@ expose_omp_command() {
 install_models_rewrite_script() {
     cat > "$OMP_REWRITE_SCRIPT" <<'EOF'
 #!/usr/bin/env bun
-import { existsSync, readFileSync, writeFileSync } from "fs";
+import { existsSync, lstatSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "fs";
 import { join } from "path";
 
 const agentDir = process.argv[2];
-const clearEnabledModels = process.argv.includes("--clear-enabled-models");
-const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
-
-if (!agentDir) {
-    process.exit(1);
+const sourceDir = process.argv[3];
+if (!agentDir || !sourceDir) {
+    throw new Error("Usage : rewrite-models.mjs <répertoire agent> <répertoire source>");
 }
 
-main();
-
-function main() {
-    const modelsPath = join(agentDir, "models.json");
-    const settingsPath = join(agentDir, "settings.json");
-
-    const models = readJsonFile(modelsPath);
-    if (isRecord(models)) {
-        const providers = models.providers;
-        if (isRecord(providers)) {
-            const ollama = providers.ollama;
-            if (isRecord(ollama) && typeof ollama.baseUrl === "string") {
-                try {
-                    const url = new URL(ollama.baseUrl);
-                    if (LOCAL_HOSTS.has(url.hostname)) {
-                        url.hostname = "host.docker.internal";
-                        ollama.baseUrl = url.toString();
-                        writeJsonFile(modelsPath, models);
-                    }
-                } catch {
-                    // Ignore invalid URLs and let omp surface the original config error.
-                }
+// Remplacement textuel : conserve les commentaires YAML/JSONC et le format de .env.
+const localUrl = /(https?:\\?\/\\?\/(?:[^\s/"'@]+@)?)(?:localhost|127\.0\.0\.1|\[::1\])(?=[:/?#\s"',}\]]|$)/gi;
+for (const filename of ["config.yml", "models.yml", "models.json", "settings.json", "auth.json", ".env"]) {
+    const path = join(agentDir, filename);
+    const sourcePath = join(sourceDir, filename);
+    const hasSource = existsSync(sourcePath) && statSync(sourcePath).isFile();
+    const inputPath = hasSource ? sourcePath : path;
+    if (!existsSync(inputPath)) {
+        continue;
+    }
+    if (existsSync(path) && lstatSync(path).isSymbolicLink()) {
+        throw new Error(`Réécriture OMP refusée sur un lien symbolique : ${path}`);
+    }
+    const original = readFileSync(inputPath, "utf8");
+    const rewritten = original.replace(localUrl, "$1host.docker.internal");
+    if (hasSource || rewritten !== original) {
+        // La copie garde les permissions, sans reprendre l'UID hôte ni suivre un lien destination.
+        const temporaryPath = `${path}.tmp.${crypto.randomUUID()}`;
+        try {
+            writeFileSync(temporaryPath, rewritten, { mode: statSync(inputPath).mode & 0o777, flag: "wx" });
+            renameSync(temporaryPath, path);
+        } finally {
+            if (existsSync(temporaryPath)) {
+                unlinkSync(temporaryPath);
             }
         }
     }
-
-    if (!clearEnabledModels) {
-        return;
-    }
-
-    const settings = readJsonFile(settingsPath);
-    if (!isRecord(settings) || !("enabledModels" in settings)) {
-        return;
-    }
-
-    delete settings.enabledModels;
-    writeJsonFile(settingsPath, settings);
-}
-
-function readJsonFile(path) {
-    if (!existsSync(path)) {
-        return undefined;
-    }
-
-    try {
-        return JSON.parse(normalizeJsonLike(readFileSync(path, "utf8")));
-    } catch {
-        return undefined;
-    }
-}
-
-function writeJsonFile(path, value) {
-    writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`, "utf8");
-}
-
-function isRecord(value) {
-    return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function normalizeJsonLike(input) {
-    return stripTrailingCommas(stripJsonComments(input));
-}
-
-function stripJsonComments(input) {
-    let output = "";
-    let inString = false;
-    let isEscaped = false;
-    let inLineComment = false;
-    let inBlockComment = false;
-
-    for (let index = 0; index < input.length; index += 1) {
-        const current = input[index];
-        const next = input[index + 1] ?? "";
-
-        if (inLineComment) {
-            if (current === "\n") {
-                inLineComment = false;
-                output += current;
-            }
-            continue;
-        }
-
-        if (inBlockComment) {
-            if (current === "*" && next === "/") {
-                inBlockComment = false;
-                index += 1;
-            }
-            continue;
-        }
-
-        if (inString) {
-            output += current;
-            if (isEscaped) {
-                isEscaped = false;
-                continue;
-            }
-            if (current === "\\") {
-                isEscaped = true;
-                continue;
-            }
-            if (current === "\"") {
-                inString = false;
-            }
-            continue;
-        }
-
-        if (current === "/" && next === "/") {
-            inLineComment = true;
-            index += 1;
-            continue;
-        }
-
-        if (current === "/" && next === "*") {
-            inBlockComment = true;
-            index += 1;
-            continue;
-        }
-
-        output += current;
-        if (current === "\"") {
-            inString = true;
-        }
-    }
-
-    return output;
-}
-
-function stripTrailingCommas(input) {
-    let output = "";
-    let inString = false;
-    let isEscaped = false;
-
-    for (let index = 0; index < input.length; index += 1) {
-        const current = input[index];
-
-        if (inString) {
-            output += current;
-            if (isEscaped) {
-                isEscaped = false;
-                continue;
-            }
-            if (current === "\\") {
-                isEscaped = true;
-                continue;
-            }
-            if (current === "\"") {
-                inString = false;
-            }
-            continue;
-        }
-
-        if (current === "\"") {
-            inString = true;
-            output += current;
-            continue;
-        }
-
-        if (current === ",") {
-            let cursor = index + 1;
-            while (cursor < input.length && /\s/.test(input[cursor])) {
-                cursor += 1;
-            }
-            if (input[cursor] === "]" || input[cursor] === "}") {
-                continue;
-            }
-        }
-
-        output += current;
-    }
-
-    return output;
 }
 EOF
     chmod +x "$OMP_REWRITE_SCRIPT"
@@ -401,21 +255,30 @@ set -eu
 OMP_REWRITE_SCRIPT="$OMP_REWRITE_SCRIPT"
 OMP_SOURCE_AGENT_DIR="\${OMP_SOURCE_AGENT_DIR:-\$HOME/.omp/agent}"
 OMP_CONTAINER_AGENT_DIR="\${PI_CODING_AGENT_DIR:-\$HOME/.omp-devcontainer/agent}"
-OMP_SEEDED_MARKER="\$OMP_CONTAINER_AGENT_DIR/.seeded-from-host"
 
 export PI_CODING_AGENT_DIR="\$OMP_CONTAINER_AGENT_DIR"
 mkdir -p "\$OMP_CONTAINER_AGENT_DIR"
 
-clear_enabled_models_flag=""
-if [ -d "\$OMP_SOURCE_AGENT_DIR" ] && [ ! -e "\$OMP_SEEDED_MARKER" ]; then
-    if [ -z "\$(ls -A "\$OMP_CONTAINER_AGENT_DIR" 2>/dev/null)" ]; then
-        cp -R "\$OMP_SOURCE_AGENT_DIR"/. "\$OMP_CONTAINER_AGENT_DIR"/
-        clear_enabled_models_flag="--clear-enabled-models"
+if [ -d "\$OMP_SOURCE_AGENT_DIR" ]; then
+    if [ "\$OMP_SOURCE_AGENT_DIR" -ef "\$OMP_CONTAINER_AGENT_DIR" ]; then
+        echo "ERREUR : les répertoires OMP source et destination doivent être distincts." >&2
+        exit 1
     fi
-    : > "\$OMP_SEEDED_MARKER"
+
+    # Seule la configuration est remplacée. Les sessions, bases et caches restent locaux.
+    for dir in agents skills hooks; do
+        if [ -d "\$OMP_SOURCE_AGENT_DIR/\$dir" ]; then
+            if [ -L "\$OMP_CONTAINER_AGENT_DIR/\$dir" ]; then
+                echo "ERREUR : synchronisation OMP refusée sur un lien symbolique : \$OMP_CONTAINER_AGENT_DIR/\$dir" >&2
+                exit 1
+            fi
+            mkdir -p "\$OMP_CONTAINER_AGENT_DIR/\$dir"
+            cp -R "\$OMP_SOURCE_AGENT_DIR/\$dir"/. "\$OMP_CONTAINER_AGENT_DIR/\$dir"/
+        fi
+    done
 fi
 
-bun "\$OMP_REWRITE_SCRIPT" "\$OMP_CONTAINER_AGENT_DIR" \$clear_enabled_models_flag
+bun "\$OMP_REWRITE_SCRIPT" "\$OMP_CONTAINER_AGENT_DIR" "\$OMP_SOURCE_AGENT_DIR"
 EOF
     chmod +x "$OMP_INIT_SCRIPT"
 }
@@ -443,9 +306,6 @@ install_shell_profile() {
 export PI_CODING_AGENT_DIR="\${PI_CODING_AGENT_DIR:-\$HOME/.omp-devcontainer/agent}"
 export OLLAMA_HOST="\${OLLAMA_HOST:-host.docker.internal:11434}"
 export OLLAMA_BASE_URL="\${OLLAMA_BASE_URL:-http://host.docker.internal:11434}"
-if [ -x "$OMP_INIT_SCRIPT" ]; then
-    "$OMP_INIT_SCRIPT" >/dev/null 2>&1 || true
-fi
 EOF
     chmod 644 "$OMP_PROFILE_SCRIPT"
 }

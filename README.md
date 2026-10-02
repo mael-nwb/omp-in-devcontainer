@@ -22,48 +22,59 @@ Depuis GHCR après publication, adaptez le chemin au dépôt publié:
 
 La feature installe Bun puis omp via l'installation source officielle (`https://omp.sh/install.sh --source`). Bun sert à la fois de runtime pour le CLI omp installé et pour le petit script de réécriture de config au démarrage (voir ci-dessous).
 
-Dans un Dev Container, la commande `omp` utilise `~/.omp-devcontainer/agent` comme répertoire d'agent persistant. La feature déclare le bind mount `${localEnv:HOME}/.omp-devcontainer` vers `/home/vscode/.omp-devcontainer` et expose `PI_CODING_AGENT_DIR=/home/vscode/.omp-devcontainer/agent` au conteneur. Si une configuration hôte est montée dans `~/.omp/agent`, elle est copiée une seule fois dans ce répertoire interne puis isolée. La feature réécrit automatiquement `providers.ollama.baseUrl` de `localhost` vers `host.docker.internal` dans cette copie interne, sans modifier la configuration hôte. Elle exporte aussi `OLLAMA_HOST` / `OLLAMA_BASE_URL` vers `host.docker.internal:11434` pour la découverte implicite Ollama. Lors de cette copie initiale, `settings.json` est aussi nettoyé de `enabledModels`.
+## Configuration hôte et données du conteneur
 
-omp migre ensuite lui-même les fichiers JSON hérités en YAML au premier lancement (`models.json` → `models.yml`, `settings.json` → `config.yml`).
+La feature déclare elle-même les deux montages nécessaires :
 
-## Préparation du dossier hôte `.omp-devcontainer`
+- `${localEnv:HOME}/.omp` vers `/mnt/omp-host`, en **lecture seule**, pour lire la configuration de l'hôte.
+- `${localEnv:HOME}/.omp-devcontainer` vers `/home/vscode/.omp-devcontainer`, pour persister les données du conteneur.
 
-Le bind mount de feature attend que le dossier hôte `${HOME}/.omp-devcontainer/agent` existe avant la création du conteneur. Ajoutez cette commande côté consommateur dans `.devcontainer/devcontainer.json`:
+Elle expose `OMP_SOURCE_AGENT_DIR=/mnt/omp-host/agent` et `PI_CODING_AGENT_DIR=/home/vscode/.omp-devcontainer/agent`. Il n'est donc pas nécessaire de recopier ces mounts ou ces variables dans le `devcontainer.json` consommateur. La destination de persistance actuelle correspond à l'utilisateur `vscode`.
 
-```json
-"initializeCommand": [
-  "sh",
-  "-lc",
-  "touch \"${localEnv:HOME}/.claude-devcontainer.json\"; mkdir -p \"${localEnv:HOME}/.omp-devcontainer/agent\"; :"
-]
+À chaque démarrage du conteneur (`postStartCommand`) et avant chaque commande `omp`, la feature synchronise la configuration hôte vers le répertoire d'agent du conteneur :
+
+- `config.yml`, `models.yml`, `models.json`, `settings.json`, `auth.json` et `.env` sont remplacés lorsque le fichier existe dans la source.
+- `agents/`, `skills/` et `hooks/` sont fusionnés, sans supprimer les fichiers propres au conteneur.
+- `sessions/`, les fichiers `*.db`, `cache/`, `blobs/` et `terminal-sessions/` restent propres au conteneur. Les données équivalentes de l'hôte ne sont pas importées.
+
+**La configuration hôte prime à chaque synchronisation.** Les modifications faites dans le conteneur sur les fichiers synchronisés seront remplacées au lancement suivant. Les fichiers absents de la source sont conservés dans le conteneur, et les sélections `enabledModels` de l'hôte sont respectées.
+
+L'ancien seed copiait uniquement vers un dossier vide, une seule fois. Un dossier déjà rempli ou un marqueur `.seeded-from-host` pouvait donc empêcher la récupération de la configuration. Ce marqueur n'est plus utilisé.
+
+La réécriture transforme les URLs HTTP(S) de `localhost`, `127.0.0.1` et `[::1]` vers `host.docker.internal` dans les six fichiers copiés. Elle couvre tous les providers et les formats YAML et JSON, y compris les fichiers JSON avec commentaires. Le remplacement conserve le format du fichier et ne modifie jamais la source hôte. Les URLs distantes et celles utilisant déjà `host.docker.internal` restent inchangées.
+
+La feature exporte aussi `OLLAMA_HOST` et `OLLAMA_BASE_URL` vers `host.docker.internal:11434` pour la découverte implicite Ollama. omp peut ensuite migrer ses fichiers JSON hérités vers YAML (`models.json` vers `models.yml`, `settings.json` vers `config.yml`).
+
+## Préparation initiale sur chaque poste
+
+Avant la première création ou le rebuild du Dev Container, exécutez **sur l'hôte** :
+
+```sh
+mkdir -p "$HOME/.omp/agent" "$HOME/.omp-devcontainer/agent"
 ```
 
-Si votre version de l'outil Dev Containers ne fusionne pas encore les `mounts` ou `containerEnv` déclarés par les features, gardez aussi ces entrées explicites dans le `devcontainer.json` consommateur:
+Cette préparation est nécessaire avant les bind mounts. Le script d'installation d'une feature s'exécute dans l'image en construction et ne peut pas créer ces dossiers sur l'hôte. Aucun script de synchronisation OMP ni `initializeCommand` spécifique à OMP n'est nécessaire dans le projet. Si la source hôte ne contient pas de configuration, omp se configure normalement dans le conteneur.
 
-```json
-"mounts": [
-  "source=${localEnv:HOME}/.omp-devcontainer,target=/home/vscode/.omp-devcontainer,type=bind,consistency=cached"
-],
-"remoteEnv": {
-  "PI_CODING_AGENT_DIR": "/home/vscode/.omp-devcontainer/agent"
-}
+Pour migrer un projet utilisant déjà `init-host-config.sh`, retirez sa copie et sa réécriture OMP ainsi que les mounts et variables OMP redondants. Conservez ses éventuelles autres préparations (Codex, Claude, Pi) et son `initializeCommand` si elles en ont besoin. Un rebuild avec la feature corrigée est nécessaire.
+
+Les montages de feature nécessitent un outil Dev Containers qui prend en charge les métadonnées de features. Avec un moteur Docker distant, leurs chemins source doivent être disponibles sur la machine du moteur.
+
+## Services locaux sur Linux
+
+Docker Desktop fournit `host.docker.internal`. Sur un hôte Linux natif, ajoutez cette résolution au service de votre `docker-compose.yml` :
+
+```yaml
+extra_hosts:
+  - "host.docker.internal:host-gateway"
 ```
 
-## Configuration omp hôte
-
-Pour réutiliser votre configuration omp locale, le dossier `${HOME}/.omp` doit exister sur l'hôte avant le rebuild du Dev Container.
-
-Ajoutez ensuite ce mount dans le `devcontainer.json` consommateur, en adaptant le home si votre `remoteUser` n'est pas `vscode`:
+Sans Compose, l'équivalent dans `devcontainer.json` est :
 
 ```json
-"mounts": [
-  "source=${localEnv:HOME}/.omp,target=/home/vscode/.omp,type=bind,consistency=cached"
-]
+"runArgs": ["--add-host=host.docker.internal:host-gateway"]
 ```
 
-Si `${HOME}/.omp` est absent, la feature installe uniquement le CLI omp. omp devra être configuré après ouverture du conteneur.
-
-La configuration active d'omp dans le conteneur reste `~/.omp-devcontainer/agent`. Le mount hôte sert uniquement de source initiale. Si `/usr/local/bin/omp` est encore un simple symlink ou si `PI_CODING_AGENT_DIR` n'est pas défini dans un shell de login, vous utilisez probablement un artefact GHCR plus ancien et il faut republier / rebuild la feature.
+Le service local doit aussi écouter sur une interface accessible au conteneur. Voir la [documentation Docker sur la résolution de l'hôte](https://docs.docker.com/compose/how-tos/networking/#custom-dns-with-extra_hosts).
 
 Des models parasites peuvent également être visibles en fonction de la configuration de votre repo. (aws, openai...)
 Pour limiter strictement leur vision, créez un dossier `.omp` à la racine du projet, puis un fichier `config.yml` (ou `settings.json` hérité) qui contient ce type de déclaration :
@@ -99,19 +110,13 @@ Ajoute la feature omp-cli à mon Dev Container. Crée ou modifie .devcontainer/d
 "features": {
   "ghcr.io/mael-nwb/omp-in-devcontainer/omp-cli:latest": {}
 }
-Ajoute aussi initializeCommand pour préparer les dossiers hôte avant le mount:
-"initializeCommand": [
-  "sh",
-  "-lc",
-  "touch \"${localEnv:HOME}/.claude-devcontainer.json\"; mkdir -p \"${localEnv:HOME}/.omp-devcontainer/agent\"; :"
-]
-Si les mounts de features ne sont pas appliqués par l'outil Dev Containers utilisé, ajoute aussi:
-"mounts": [
-  "source=${localEnv:HOME}/.omp-devcontainer,target=/home/vscode/.omp-devcontainer,type=bind,consistency=cached"
-],
-"remoteEnv": {
-  "PI_CODING_AGENT_DIR": "/home/vscode/.omp-devcontainer/agent"
-}
+Prépare sur l'hôte les dossiers nécessaires avant la création du conteneur :
+mkdir -p "$HOME/.omp/agent" "$HOME/.omp-devcontainer/agent"
+La feature fournit les mounts, les variables OMP et la synchronisation au démarrage.
+N'ajoute pas de script de synchronisation OMP ni d'initializeCommand pour cette synchronisation.
+Préserve les initializeCommand et mounts nécessaires aux autres outils.
+Sur Linux natif, ajoute host.docker.internal:host-gateway avec extra_hosts (Compose)
+ou runArgs: ["--add-host=host.docker.internal:host-gateway"] (sans Compose).
 EOF
 )"
 ```

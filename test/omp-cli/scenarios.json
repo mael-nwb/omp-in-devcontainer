@@ -4,7 +4,7 @@
         "initializeCommand": [
             "sh",
             "-lc",
-            "touch \"${localEnv:HOME}/.claude-devcontainer.json\"; mkdir -p \"${localEnv:HOME}/.omp-devcontainer/agent\"; :"
+            "mkdir -p \"${localEnv:HOME}/.omp/agent\" \"${localEnv:HOME}/.omp-devcontainer/agent\""
         ],
         "features": {
             "omp-cli": {}
